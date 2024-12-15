@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"mime"
 	"strings"
 	"time"
 
@@ -224,11 +223,12 @@ func matchBytes(buf []byte, patterns []string) bool {
 func getEnvelope(h textproto.Header) *imap.Envelope {
 	mh := mail.Header{gomessage.Header{h}}
 	date, _ := mh.Date()
+	subject, _ := mh.Subject()
 	inReplyTo, _ := mh.MsgIDList("In-Reply-To")
 	messageID, _ := mh.MessageID()
 	return &imap.Envelope{
 		Date:      date,
-		Subject:   h.Get("Subject"),
+		Subject:   subject,
 		From:      parseAddressList(mh, "From"),
 		Sender:    parseAddressList(mh, "Sender"),
 		ReplyTo:   parseAddressList(mh, "Reply-To"),
@@ -241,7 +241,6 @@ func getEnvelope(h textproto.Header) *imap.Envelope {
 }
 
 func parseAddressList(mh mail.Header, k string) []imap.Address {
-	// TODO: leave the quoted words unchanged
 	// TODO: handle groups
 	addrs, _ := mh.AddressList(k)
 	var l []imap.Address
@@ -251,7 +250,7 @@ func parseAddressList(mh mail.Header, k string) []imap.Address {
 			continue
 		}
 		l = append(l, imap.Address{
-			Name:    mime.QEncoding.Encode("utf-8", addr.Name),
+			Name:    addr.Name,
 			Mailbox: mailbox,
 			Host:    host,
 		})
