@@ -40,8 +40,8 @@ func (msg *message) fetch(w *imapserver.FetchResponseWriter, options *imap.Fetch
 	if options.Envelope {
 		w.WriteEnvelope(msg.envelope())
 	}
-	if bs := options.BodyStructure; bs != nil {
-		w.WriteBodyStructure(msg.bodyStructure(bs.Extended))
+	if options.BodyStructure != nil {
+		w.WriteBodyStructure(imapserver.ExtractBodyStructure(bytes.NewReader(msg.buf)))
 	}
 
 	for _, bs := range options.BodySection {
@@ -69,12 +69,6 @@ func (msg *message) envelope() *imap.Envelope {
 		return nil
 	}
 	return imapserver.ExtractEnvelope(header)
-}
-
-func (msg *message) bodyStructure(extended bool) imap.BodyStructure {
-	br := bufio.NewReader(bytes.NewReader(msg.buf))
-	header, _ := textproto.ReadHeader(br)
-	return getBodyStructure(header, br, extended)
 }
 
 func (msg *message) flagList() []imap.Flag {
@@ -222,89 +216,4 @@ func matchBytes(buf []byte, patterns []string) bool {
 
 func canonicalFlag(flag imap.Flag) imap.Flag {
 	return imap.Flag(strings.ToLower(string(flag)))
-}
-
-func getBodyStructure(rawHeader textproto.Header, r io.Reader, extended bool) imap.BodyStructure {
-	header := gomessage.Header{rawHeader}
-
-	mediaType, typeParams, _ := header.ContentType()
-	primaryType, subType, _ := strings.Cut(mediaType, "/")
-
-	if primaryType == "multipart" {
-		bs := &imap.BodyStructureMultiPart{Subtype: subType}
-		mr := textproto.NewMultipartReader(r, typeParams["boundary"])
-		for {
-			part, _ := mr.NextPart()
-			if part == nil {
-				break
-			}
-			bs.Children = append(bs.Children, getBodyStructure(part.Header, part, extended))
-		}
-		if extended {
-			bs.Extended = &imap.BodyStructureMultiPartExt{
-				Params:      typeParams,
-				Disposition: getContentDisposition(header),
-				Language:    getContentLanguage(header),
-				Location:    header.Get("Content-Location"),
-			}
-		}
-		return bs
-	} else {
-		body, _ := io.ReadAll(r) // TODO: optimize
-		bs := &imap.BodyStructureSinglePart{
-			Type:        primaryType,
-			Subtype:     subType,
-			Params:      typeParams,
-			ID:          header.Get("Content-Id"),
-			Description: header.Get("Content-Description"),
-			Encoding:    header.Get("Content-Transfer-Encoding"),
-			Size:        uint32(len(body)),
-		}
-		if mediaType == "message/rfc822" || mediaType == "message/global" {
-			br := bufio.NewReader(bytes.NewReader(body))
-			childHeader, _ := textproto.ReadHeader(br)
-			bs.MessageRFC822 = &imap.BodyStructureMessageRFC822{
-				Envelope:      imapserver.ExtractEnvelope(childHeader),
-				BodyStructure: getBodyStructure(childHeader, br, extended),
-				NumLines:      int64(bytes.Count(body, []byte("\n"))),
-			}
-		}
-		if primaryType == "text" {
-			bs.Text = &imap.BodyStructureText{
-				NumLines: int64(bytes.Count(body, []byte("\n"))),
-			}
-		}
-		if extended {
-			bs.Extended = &imap.BodyStructureSinglePartExt{
-				Disposition: getContentDisposition(header),
-				Language:    getContentLanguage(header),
-				Location:    header.Get("Content-Location"),
-			}
-		}
-		return bs
-	}
-}
-
-func getContentDisposition(header gomessage.Header) *imap.BodyStructureDisposition {
-	disp, dispParams, _ := header.ContentDisposition()
-	if disp == "" {
-		return nil
-	}
-	return &imap.BodyStructureDisposition{
-		Value:  disp,
-		Params: dispParams,
-	}
-}
-
-func getContentLanguage(header gomessage.Header) []string {
-	v := header.Get("Content-Language")
-	if v == "" {
-		return nil
-	}
-	// TODO: handle CFWS
-	l := strings.Split(v, ",")
-	for i, lang := range l {
-		l[i] = strings.TrimSpace(lang)
-	}
-	return l
 }

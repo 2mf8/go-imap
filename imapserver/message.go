@@ -189,3 +189,93 @@ func parseAddressList(mh mail.Header, k string) []imap.Address {
 	}
 	return l
 }
+
+// ExtractBodyStructure extracts the structure of a message body.
+//
+// It can be used by server backends to implement Session.Fetch.
+func ExtractBodyStructure(r io.Reader) imap.BodyStructure {
+	br := bufio.NewReader(r)
+	header, _ := textproto.ReadHeader(br)
+	return extractBodyStructure(header, br)
+}
+
+func extractBodyStructure(rawHeader textproto.Header, r io.Reader) imap.BodyStructure {
+	header := gomessage.Header{rawHeader}
+
+	mediaType, typeParams, _ := header.ContentType()
+	primaryType, subType, _ := strings.Cut(mediaType, "/")
+
+	if primaryType == "multipart" {
+		bs := &imap.BodyStructureMultiPart{Subtype: subType}
+		mr := textproto.NewMultipartReader(r, typeParams["boundary"])
+		for {
+			part, _ := mr.NextPart()
+			if part == nil {
+				break
+			}
+			bs.Children = append(bs.Children, extractBodyStructure(part.Header, part))
+		}
+		bs.Extended = &imap.BodyStructureMultiPartExt{
+			Params:      typeParams,
+			Disposition: getContentDisposition(header),
+			Language:    getContentLanguage(header),
+			Location:    header.Get("Content-Location"),
+		}
+		return bs
+	} else {
+		body, _ := io.ReadAll(r) // TODO: optimize
+		bs := &imap.BodyStructureSinglePart{
+			Type:        primaryType,
+			Subtype:     subType,
+			Params:      typeParams,
+			ID:          header.Get("Content-Id"),
+			Description: header.Get("Content-Description"),
+			Encoding:    header.Get("Content-Transfer-Encoding"),
+			Size:        uint32(len(body)),
+		}
+		if mediaType == "message/rfc822" || mediaType == "message/global" {
+			br := bufio.NewReader(bytes.NewReader(body))
+			childHeader, _ := textproto.ReadHeader(br)
+			bs.MessageRFC822 = &imap.BodyStructureMessageRFC822{
+				Envelope:      ExtractEnvelope(childHeader),
+				BodyStructure: extractBodyStructure(childHeader, br),
+				NumLines:      int64(bytes.Count(body, []byte("\n"))),
+			}
+		}
+		if primaryType == "text" {
+			bs.Text = &imap.BodyStructureText{
+				NumLines: int64(bytes.Count(body, []byte("\n"))),
+			}
+		}
+		bs.Extended = &imap.BodyStructureSinglePartExt{
+			Disposition: getContentDisposition(header),
+			Language:    getContentLanguage(header),
+			Location:    header.Get("Content-Location"),
+		}
+		return bs
+	}
+}
+
+func getContentDisposition(header gomessage.Header) *imap.BodyStructureDisposition {
+	disp, dispParams, _ := header.ContentDisposition()
+	if disp == "" {
+		return nil
+	}
+	return &imap.BodyStructureDisposition{
+		Value:  disp,
+		Params: dispParams,
+	}
+}
+
+func getContentLanguage(header gomessage.Header) []string {
+	v := header.Get("Content-Language")
+	if v == "" {
+		return nil
+	}
+	// TODO: handle CFWS
+	l := strings.Split(v, ",")
+	for i, lang := range l {
+		l[i] = strings.TrimSpace(lang)
+	}
+	return l
+}
