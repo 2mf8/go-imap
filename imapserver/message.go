@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	gomessage "github.com/emersion/go-message"
+	"github.com/emersion/go-message/mail"
 	"github.com/emersion/go-message/textproto"
 
 	"github.com/emersion/go-imap/v2"
@@ -146,4 +147,45 @@ func openMessagePart(header textproto.Header, body io.Reader, parentMediaType st
 		return header, br
 	}
 	return header, body
+}
+
+// ExtractEnvelope returns a message envelope from its header.
+//
+// It can be used by server backends to implement Session.Fetch.
+func ExtractEnvelope(h textproto.Header) *imap.Envelope {
+	mh := mail.Header{gomessage.Header{h}}
+	date, _ := mh.Date()
+	subject, _ := mh.Subject()
+	inReplyTo, _ := mh.MsgIDList("In-Reply-To")
+	messageID, _ := mh.MessageID()
+	return &imap.Envelope{
+		Date:      date,
+		Subject:   subject,
+		From:      parseAddressList(mh, "From"),
+		Sender:    parseAddressList(mh, "Sender"),
+		ReplyTo:   parseAddressList(mh, "Reply-To"),
+		To:        parseAddressList(mh, "To"),
+		Cc:        parseAddressList(mh, "Cc"),
+		Bcc:       parseAddressList(mh, "Bcc"),
+		InReplyTo: inReplyTo,
+		MessageID: messageID,
+	}
+}
+
+func parseAddressList(mh mail.Header, k string) []imap.Address {
+	// TODO: handle groups
+	addrs, _ := mh.AddressList(k)
+	var l []imap.Address
+	for _, addr := range addrs {
+		mailbox, host, ok := strings.Cut(addr.Address, "@")
+		if !ok {
+			continue
+		}
+		l = append(l, imap.Address{
+			Name:    addr.Name,
+			Mailbox: mailbox,
+			Host:    host,
+		})
+	}
+	return l
 }

@@ -68,7 +68,7 @@ func (msg *message) envelope() *imap.Envelope {
 	if err != nil {
 		return nil
 	}
-	return getEnvelope(header)
+	return imapserver.ExtractEnvelope(header)
 }
 
 func (msg *message) bodyStructure(extended bool) imap.BodyStructure {
@@ -220,44 +220,6 @@ func matchBytes(buf []byte, patterns []string) bool {
 	return true
 }
 
-func getEnvelope(h textproto.Header) *imap.Envelope {
-	mh := mail.Header{gomessage.Header{h}}
-	date, _ := mh.Date()
-	subject, _ := mh.Subject()
-	inReplyTo, _ := mh.MsgIDList("In-Reply-To")
-	messageID, _ := mh.MessageID()
-	return &imap.Envelope{
-		Date:      date,
-		Subject:   subject,
-		From:      parseAddressList(mh, "From"),
-		Sender:    parseAddressList(mh, "Sender"),
-		ReplyTo:   parseAddressList(mh, "Reply-To"),
-		To:        parseAddressList(mh, "To"),
-		Cc:        parseAddressList(mh, "Cc"),
-		Bcc:       parseAddressList(mh, "Bcc"),
-		InReplyTo: inReplyTo,
-		MessageID: messageID,
-	}
-}
-
-func parseAddressList(mh mail.Header, k string) []imap.Address {
-	// TODO: handle groups
-	addrs, _ := mh.AddressList(k)
-	var l []imap.Address
-	for _, addr := range addrs {
-		mailbox, host, ok := strings.Cut(addr.Address, "@")
-		if !ok {
-			continue
-		}
-		l = append(l, imap.Address{
-			Name:    addr.Name,
-			Mailbox: mailbox,
-			Host:    host,
-		})
-	}
-	return l
-}
-
 func canonicalFlag(flag imap.Flag) imap.Flag {
 	return imap.Flag(strings.ToLower(string(flag)))
 }
@@ -302,7 +264,7 @@ func getBodyStructure(rawHeader textproto.Header, r io.Reader, extended bool) im
 			br := bufio.NewReader(bytes.NewReader(body))
 			childHeader, _ := textproto.ReadHeader(br)
 			bs.MessageRFC822 = &imap.BodyStructureMessageRFC822{
-				Envelope:      getEnvelope(childHeader),
+				Envelope:      imapserver.ExtractEnvelope(childHeader),
 				BodyStructure: getBodyStructure(childHeader, br, extended),
 				NumLines:      int64(bytes.Count(body, []byte("\n"))),
 			}
