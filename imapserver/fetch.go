@@ -439,7 +439,7 @@ func (w *FetchResponseWriter) WriteBinarySection(section *imap.FetchItemBinarySe
 }
 
 // WriteBinarySectionSize writes a binary section size.
-func (w *FetchResponseWriter) WriteBinarySectionSize(section *imap.FetchItemBinarySection, size uint32) {
+func (w *FetchResponseWriter) WriteBinarySectionSize(section *imap.FetchItemBinarySectionSize, size uint32) {
 	w.writeItemSep()
 	enc := w.enc.Encoder
 
