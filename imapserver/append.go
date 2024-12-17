@@ -49,7 +49,7 @@ func (c *Conn) handleAppend(tag string, dec *imapwire.Decoder) error {
 	options.Time = t
 
 	var dataExt string
-	if dec.Atom(&dataExt) {
+	if !dec.Special('~') && dec.Atom(&dataExt) { // ignore literal8 prefix if any for BINARY
 		switch strings.ToUpper(dataExt) {
 		case "UTF8":
 			// '~' is the literal8 prefix
@@ -59,8 +59,6 @@ func (c *Conn) handleAppend(tag string, dec *imapwire.Decoder) error {
 		default:
 			return newClientBugError("Unknown APPEND data extension")
 		}
-	} else {
-		dec.Special('~') // ignore literal8 prefix if any for BINARY
 	}
 
 	lit, nonSync, err := dec.ExpectLiteralReader()
