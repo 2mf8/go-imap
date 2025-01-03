@@ -162,7 +162,9 @@ func (msg *message) search(seqNum uint32, criteria *imap.SearchCriteria) bool {
 			continue
 		}
 		found := false
-		for _, v := range header.Values(fieldCriteria.Key) {
+		fields := header.FieldsByKey(fieldCriteria.Key)
+		for fields.Next() {
+			v, _ := fields.Text()
 			found = strings.Contains(strings.ToLower(v), strings.ToLower(fieldCriteria.Value))
 			if found {
 				break
