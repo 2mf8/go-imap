@@ -113,6 +113,14 @@ func (msg *message) store(store *imap.StoreFlags) {
 	}
 }
 
+func (msg *message) reader() *gomessage.Entity {
+	r, _ := gomessage.Read(bytes.NewReader(msg.buf))
+	if r == nil {
+		r, _ = gomessage.New(gomessage.Header{}, bytes.NewReader(nil))
+	}
+	return r
+}
+
 func (msg *message) search(seqNum uint32, criteria *imap.SearchCriteria) bool {
 	for _, seqSet := range criteria.SeqNum {
 		if seqNum == 0 || !seqSet.Contains(seqNum) {
@@ -146,31 +154,10 @@ func (msg *message) search(seqNum uint32, criteria *imap.SearchCriteria) bool {
 		return false
 	}
 
-	if !matchBytes(msg.buf, criteria.Text) {
-		return false
-	}
-
-	br := bufio.NewReader(bytes.NewReader(msg.buf))
-	rawHeader, _ := textproto.ReadHeader(br)
-	header := mail.Header{gomessage.Header{rawHeader}}
+	header := mail.Header{msg.reader().Header}
 
 	for _, fieldCriteria := range criteria.Header {
-		if !header.Has(fieldCriteria.Key) {
-			return false
-		}
-		if fieldCriteria.Value == "" {
-			continue
-		}
-		found := false
-		fields := header.FieldsByKey(fieldCriteria.Key)
-		for fields.Next() {
-			v, _ := fields.Text()
-			found = strings.Contains(strings.ToLower(v), strings.ToLower(fieldCriteria.Value))
-			if found {
-				break
-			}
-		}
-		if !found {
+		if !matchHeaderFields(header.FieldsByKey(fieldCriteria.Key), fieldCriteria.Value) {
 			return false
 		}
 	}
@@ -184,9 +171,13 @@ func (msg *message) search(seqNum uint32, criteria *imap.SearchCriteria) bool {
 		}
 	}
 
-	if len(criteria.Body) > 0 {
-		body, _ := io.ReadAll(br)
-		if !matchBytes(body, criteria.Body) {
+	for _, text := range criteria.Text {
+		if !matchEntity(msg.reader(), text, true) {
+			return false
+		}
+	}
+	for _, body := range criteria.Body {
+		if !matchEntity(msg.reader(), body, false) {
 			return false
 		}
 	}
@@ -219,17 +210,62 @@ func matchDate(t, since, before time.Time) bool {
 	return true
 }
 
-func matchBytes(buf []byte, patterns []string) bool {
-	if len(patterns) == 0 {
-		return true
+func matchHeaderFields(fields gomessage.HeaderFields, pattern string) bool {
+	if pattern == "" {
+		return fields.Len() > 0
 	}
-	buf = bytes.ToLower(buf)
-	for _, s := range patterns {
-		if !bytes.Contains(buf, bytes.ToLower([]byte(s))) {
-			return false
+
+	pattern = strings.ToLower(pattern)
+	for fields.Next() {
+		v, _ := fields.Text()
+		if strings.Contains(strings.ToLower(v), pattern) {
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+func matchEntity(e *gomessage.Entity, pattern string, includeHeader bool) bool {
+	if pattern == "" {
+		return true
+	}
+
+	if includeHeader && matchHeaderFields(e.Header.Fields(), pattern) {
+		return true
+	}
+
+	if mr := e.MultipartReader(); mr != nil {
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				return false
+			}
+
+			if matchEntity(part, pattern, includeHeader) {
+				return true
+			}
+		}
+
+		return false
+	} else {
+		t, _, err := e.Header.ContentType()
+		if err != nil {
+			return false
+		}
+
+		if !strings.HasPrefix(t, "text/") && !strings.HasPrefix(t, "message/") {
+			return false
+		}
+
+		buf, err := io.ReadAll(e.Body)
+		if err != nil {
+			return false
+		}
+
+		return bytes.Contains(bytes.ToLower(buf), bytes.ToLower([]byte(pattern)))
+	}
 }
 
 func canonicalFlag(flag imap.Flag) imap.Flag {
