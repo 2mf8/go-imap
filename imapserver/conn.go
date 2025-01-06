@@ -23,6 +23,8 @@ const (
 
 	respWriteTimeout    = 30 * time.Second
 	literalWriteTimeout = 5 * time.Minute
+
+	maxCommandSize = 50 * 1024 // RFC 2683 section 3.2.1.5 says 8KiB minimum
 )
 
 var internalServerErrorResp = &imap.StatusResponse{
@@ -167,6 +169,7 @@ func (c *Conn) serve() {
 		c.setReadTimeout(readTimeout)
 
 		dec := imapwire.NewDecoder(c.br, imapwire.ConnSideServer)
+		dec.MaxSize = maxCommandSize
 		dec.CheckBufferedLiteralFunc = c.checkBufferedLiteral
 
 		if c.state == imap.ConnStateLogout || dec.EOF() {
